@@ -2,4 +2,3 @@ pandas
 numpy
 streamlit
 plotly
-python-3.10
