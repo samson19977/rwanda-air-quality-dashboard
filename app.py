@@ -1,16 +1,22 @@
 # app.py
-import os
-import sys
 import pandas as pd
 import streamlit as st
 import plotly.express as px
+import plotly.graph_objects as go
 from datetime import datetime
 
 # ------------- CONFIG -------------
 REQUIRED_COLS = ['Date', 'SO2', 'CO', 'PM10', 'NO2', 'O3', 'PM2.5', 'Site']
 POLLUTANTS = ['SO2', 'CO', 'PM10', 'NO2', 'O3', 'PM2.5']
-THRESHOLDS = {'SO2': 40, 'CO': 4, 'PM10': 45, 'NO2': 25, 'O3': 100, 'PM2.5': 15}
-st.set_page_config(layout="wide", page_title="🌍 Rwanda Air Quality Analysis", page_icon="🌍")
+THRESHOLDS = {
+    'SO2': {'safe': 20, 'moderate': 40, 'unhealthy': 80},
+    'CO': {'safe': 2, 'moderate': 4, 'unhealthy': 10},
+    'PM10': {'safe': 20, 'moderate': 45, 'unhealthy': 100},
+    'NO2': {'safe': 10, 'moderate': 25, 'unhealthy': 50},
+    'O3': {'safe': 50, 'moderate': 100, 'unhealthy': 150},
+    'PM2.5': {'safe': 10, 'moderate': 15, 'unhealthy': 30}
+}
+st.set_page_config(layout="wide", page_title="🌍 Rwanda Air Quality Dashboard", page_icon="🌍")
 
 # ------------- HELPERS -------------
 @st.cache_data(ttl=3600)
@@ -34,6 +40,8 @@ def load_data(file_path, region_label):
             
         df['Region'] = region_label
         df['Year'] = df['Date'].dt.year
+        df['Month'] = df['Date'].dt.month_name()
+        df['DayOfWeek'] = df['Date'].dt.day_name()
         
         return df
         
@@ -41,11 +49,26 @@ def load_data(file_path, region_label):
         st.error(f"Error loading {region_label} data: {str(e)}")
         return pd.DataFrame()
 
+def show_thresholds():
+    """Display threshold information in an expandable section"""
+    with st.expander("ℹ️ Air Quality Threshold Guidelines (WHO Standards)"):
+        st.markdown("""
+        **Threshold levels used in this dashboard (µg/m³):**
+        - **Good**: Below safe level
+        - **Moderate**: Between safe and moderate levels
+        - **Unhealthy**: Above moderate level
+        """)
+        
+        threshold_df = pd.DataFrame(THRESHOLDS).T.reset_index()
+        threshold_df.columns = ['Pollutant', 'Safe Level', 'Moderate Level', 'Unhealthy Level']
+        st.dataframe(threshold_df.style.format("{:.1f}"), use_container_width=True)
+
 # ------------- MAIN APP -------------
 def main():
-    st.title(" Rwanda Air Quality Dashboard")
+    st.title("🇷🇼 Rwanda Air Quality Dashboard")
+    show_thresholds()
     
-    # Load data - using your specific files
+    # Load data
     city_df = load_data("AIR_POLLUTION_IN_KIGALI_FROM_2020_TO_2024.csv", "Urban")
     rural_df = load_data("AIR_POLLUTION_IN_RURAL_FROM_2020_TO_2024.csv", "Rural")
     
@@ -57,46 +80,98 @@ def main():
     
     # Key Metrics
     st.header("📊 Key Metrics")
-    cols = st.columns(3)
+    cols = st.columns(4)
     cols[0].metric("Total Records", len(all_data))
     cols[1].metric("Monitoring Sites", all_data['Site'].nunique())
-    cols[2].metric("Avg PM2.5", f"{all_data['PM2.5'].mean():.1f} µg/m³")
+    cols[2].metric("Avg PM2.5", f"{all_data['PM2.5'].mean():.1f} µg/m³", 
+                  help=f"WHO Moderate Threshold: {THRESHOLDS['PM2.5']['moderate']} µg/m³")
+    exceed_percent = (all_data['PM2.5'] > THRESHOLDS['PM2.5']['moderate']).mean() * 100
+    cols[3].metric("Exceedance Rate", f"{exceed_percent:.1f}%", 
+                  delta=f"{exceed_percent:.1f}% above moderate threshold")
     
-    # Yearly Trends
-    st.header("📈 Yearly Pollution Trends")
-    pollutant = st.selectbox("Select Pollutant", POLLUTANTS)
+    # -------------------------------
+    # NEW: Pollutant Comparison Radar Chart
+    # -------------------------------
+    st.header("📊 Pollutant Comparison (Relative Levels)")
+    avg_pollutants = all_data.groupby('Region')[POLLUTANTS].mean().reset_index()
     
-    yearly_avg = all_data.groupby(['Region', 'Year'])[pollutant].mean().reset_index()
+    fig = go.Figure()
+    for region in avg_pollutants['Region'].unique():
+        region_data = avg_pollutants[avg_pollutants['Region'] == region].iloc[0]
+        fig.add_trace(go.Scatterpolar(
+            r=region_data[POLLUTANTS].values,
+            theta=POLLUTANTS,
+            fill='toself',
+            name=region,
+            hoverinfo='text',
+            text=[f"{p}: {v:.1f} µg/m³" for p, v in zip(POLLUTANTS, region_data[POLLUTANTS])]
+        ))
     
-    fig = px.line(
-        yearly_avg,
-        x='Year',
-        y=pollutant,
-        color='Region',
-        title=f'Average {pollutant} Levels by Year',
-        labels={pollutant: f'{pollutant} (µg/m³)'}
+    fig.update_layout(
+        polar=dict(radialaxis=dict(visible=True)),
+        showlegend=True,
+        height=500
     )
-    fig.add_hline(y=THRESHOLDS[pollutant], line_dash="dash", line_color="red")
     st.plotly_chart(fig, use_container_width=True)
     
-    # Data Summary - Simplified and more robust
-    st.header("📋 Pollution Data Summary")
-    try:
-        summary_df = all_data.groupby('Region')[POLLUTANTS].mean().round(1)
+    # -------------------------------
+    # NEW: Monthly Trends Heatmap
+    # -------------------------------
+    st.header("🌡️ Monthly Pollution Patterns")
+    monthly_data = all_data.groupby(['Region', 'Month', 'Year'])[POLLUTANTS].mean().reset_index()
+    month_order = ['January', 'February', 'March', 'April', 'May', 'June', 
+                  'July', 'August', 'September', 'October', 'November', 'December']
+    monthly_data['Month'] = pd.Categorical(monthly_data['Month'], categories=month_order, ordered=True)
+    
+    pollutant = st.selectbox("Select Pollutant for Monthly Analysis", POLLUTANTS)
+    
+    heatmap_data = monthly_data.pivot_table(index=['Region', 'Month'], columns='Year', values=pollutant)
+    
+    fig = px.imshow(
+        heatmap_data,
+        labels=dict(x="Year", y="Month", color=f"{pollutant} (µg/m³)"),
+        aspect="auto",
+        color_continuous_scale='RdYlGn_r',  # Red-Yellow-Green (reversed)
+        title=f"Monthly {pollutant} Levels by Region and Year"
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # -------------------------------
+    # Enhanced Data Summary
+    # -------------------------------
+    st.header("📋 Detailed Pollution Statistics")
+    tab1, tab2 = st.tabs(["By Region", "By Site"])
+    
+    with tab1:
+        st.subheader("Regional Averages")
+        regional_stats = all_data.groupby('Region')[POLLUTANTS].agg(['mean', 'max', 'min'])
         st.dataframe(
-            summary_df.style.apply(
-                lambda x: ['background-color: #ffcccc' if x[col] > THRESHOLDS.get(col, float('inf')) else '' 
-                         for col in summary_df.columns],
+            regional_stats.style.format("{:.1f}").apply(
+                lambda x: ['background-color: #ffcccc' if x.name[1] == 'mean' and 
+                          x[p] > THRESHOLDS[p]['moderate'] else '' 
+                         for p in POLLUTANTS],
                 axis=1
             ),
             use_container_width=True
         )
-    except Exception as e:
-        st.error(f"Could not display data summary: {str(e)}")
-
+    
+    with tab2:
+        st.subheader("Site-Specific Averages")
+        site_stats = all_data.groupby(['Region', 'Site'])[POLLUTANTS].mean().reset_index()
+        st.dataframe(
+            site_stats.style.format("{:.1f}").apply(
+                lambda x: ['background-color: #ffcccc' if x[p] > THRESHOLDS[p]['moderate'] else '' 
+                          for p in POLLUTANTS],
+                axis=1
+            ),
+            use_container_width=True,
+            height=600
+        )
+    
     # Footer
     st.markdown("---")
-    st.markdown(f"**Last Updated**: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    st.markdown(f"**Last Updated**: {datetime.now().strftime('%Y-%m-%d %H:%M')} | "
+                "Data Source: Rwanda Environment Management Authority")
 
 # ------------- ENTRY POINT -------------
 if __name__ == "__main__":
