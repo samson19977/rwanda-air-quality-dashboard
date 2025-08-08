@@ -74,7 +74,7 @@ def show_thresholds():
 
 # ------------- MAIN APP -------------
 def main():
-    st.title("🇷🇼 Rwanda Air Quality Dashboard")
+    st.title("Rwanda Air Quality Dashboard")
     show_thresholds()
     
     # Load data
