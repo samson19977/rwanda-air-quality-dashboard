@@ -40,7 +40,8 @@ def load_data(file_path, region_label):
             
         df['Region'] = region_label
         df['Year'] = df['Date'].dt.year
-        df['Month'] = df['Date'].dt.month_name()
+        df['Month'] = df['Date'].dt.month
+        df['MonthName'] = df['Date'].dt.month_name()
         df['DayOfWeek'] = df['Date'].dt.day_name()
         
         return df
@@ -59,7 +60,7 @@ def show_thresholds():
         - **Unhealthy**: Above moderate level
         """)
         
-        # Create threshold table in a way that works with Streamlit
+        # Create threshold table
         threshold_data = []
         for pollutant, levels in THRESHOLDS.items():
             threshold_data.append({
@@ -69,8 +70,7 @@ def show_thresholds():
                 'Unhealthy Level': levels['unhealthy']
             })
         
-        threshold_df = pd.DataFrame(threshold_data)
-        st.dataframe(threshold_df, use_container_width=True)
+        st.table(pd.DataFrame(threshold_data))
 
 # ------------- MAIN APP -------------
 def main():
@@ -98,69 +98,156 @@ def main():
     cols[3].metric("Exceedance Rate", f"{exceed_percent:.1f}%", 
                   delta=f"{exceed_percent:.1f}% above moderate threshold")
     
-    # Pollutant Comparison Radar Chart
-    st.header("📊 Pollutant Comparison (Relative Levels)")
-    avg_pollutants = all_data.groupby('Region')[POLLUTANTS].mean().reset_index()
+    # -------------------------------
+    # NEW: Enhanced Pollutant Comparison
+    # -------------------------------
+    st.header("📊 Pollutant Composition Analysis")
     
-    fig = go.Figure()
-    for region in avg_pollutants['Region'].unique():
-        region_data = avg_pollutants[avg_pollutants['Region'] == region].iloc[0]
-        fig.add_trace(go.Scatterpolar(
-            r=region_data[POLLUTANTS].values,
-            theta=POLLUTANTS,
-            fill='toself',
-            name=region,
-            hoverinfo='text',
-            text=[f"{p}: {v:.1f} µg/m³" for p, v in zip(POLLUTANTS, region_data[POLLUTANTS])]
-        ))
+    tab1, tab2, tab3 = st.tabs(["Relative Contribution", "PM2.5 Focus", "Distribution Analysis"])
     
-    fig.update_layout(
-        polar=dict(radialaxis=dict(visible=True)),
-        showlegend=True,
+    with tab1:
+        st.subheader("Pollutant Composition by Region")
+        
+        # Calculate relative percentages
+        region_avg = all_data.groupby('Region')[POLLUTANTS].mean()
+        region_pct = region_avg.div(region_avg.sum(axis=1), axis=0) * 100
+        
+        fig = px.bar(
+            region_pct.reset_index(),
+            x='Region',
+            y=POLLUTANTS,
+            color_discrete_sequence=px.colors.qualitative.Plotly,
+            barmode='stack',
+            title='Relative Contribution of Each Pollutant by Region',
+            labels={'value': 'Percentage Contribution (%)', 'variable': 'Pollutant'}
+        )
+        fig.update_layout(height=500)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with tab2:
+        st.subheader("PM2.5 Analysis")
+        
+        cols = st.columns(2)
+        with cols[0]:
+            # PM2.5 distribution by region
+            fig = px.box(
+                all_data,
+                x='Region',
+                y='PM2.5',
+                color='Region',
+                points="all",
+                title='PM2.5 Distribution by Region',
+                labels={'PM2.5': 'PM2.5 (µg/m³)'}
+            )
+            fig.add_hline(
+                y=THRESHOLDS['PM2.5']['moderate'],
+                line_dash="dash",
+                line_color="red",
+                annotation_text="Moderate Threshold"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with cols[1]:
+            # PM2.5 trends over time
+            pm25_trend = all_data.groupby(['Region', 'Year'])['PM2.5'].mean().reset_index()
+            fig = px.line(
+                pm25_trend,
+                x='Year',
+                y='PM2.5',
+                color='Region',
+                title='PM2.5 Annual Trends',
+                markers=True,
+                labels={'PM2.5': 'PM2.5 (µg/m³)'}
+            )
+            fig.add_hline(
+                y=THRESHOLDS['PM2.5']['moderate'],
+                line_dash="dash",
+                line_color="red",
+                annotation_text="Moderate Threshold"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+    
+    with tab3:
+        st.subheader("Pollutant Distribution Analysis")
+        
+        pollutant = st.selectbox("Select Pollutant to Visualize", POLLUTANTS)
+        
+        fig = px.violin(
+            all_data,
+            x='Region',
+            y=pollutant,
+            color='Region',
+            box=True,
+            points="all",
+            title=f'{pollutant} Distribution by Region',
+            labels={pollutant: f'{pollutant} (µg/m³)'}
+        )
+        fig.add_hline(
+            y=THRESHOLDS[pollutant]['moderate'],
+            line_dash="dash",
+            line_color="red",
+            annotation_text="Moderate Threshold"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # -------------------------------
+    # Monthly Trends
+    # -------------------------------
+    st.header("📈 Monthly Pollution Trends")
+    pollutant = st.selectbox("Select Pollutant for Trend Analysis", POLLUTANTS, key='monthly_trend')
+    
+    # Prepare monthly data
+    monthly_data = all_data.groupby(['Region', 'Year', 'Month', 'MonthName'])[pollutant].mean().reset_index()
+    monthly_data['Year-Month'] = monthly_data['Year'].astype(str) + '-' + monthly_data['Month'].astype(str).str.zfill(2)
+    
+    # Create line plot
+    fig = px.line(
+        monthly_data,
+        x='Year-Month',
+        y=pollutant,
+        color='Region',
+        line_group='Region',
+        hover_name='MonthName',
+        title=f'Monthly {pollutant} Levels Over Time',
+        labels={pollutant: f'{pollutant} (µg/m³)', 'Year-Month': 'Time Period'},
         height=500
     )
-    st.plotly_chart(fig, use_container_width=True)
     
-    # Monthly Trends Heatmap
-    st.header("🌡️ Monthly Pollution Patterns")
-    monthly_data = all_data.groupby(['Region', 'Month', 'Year'])[POLLUTANTS].mean().reset_index()
-    month_order = ['January', 'February', 'March', 'April', 'May', 'June', 
-                  'July', 'August', 'September', 'October', 'November', 'December']
-    monthly_data['Month'] = pd.Categorical(monthly_data['Month'], categories=month_order, ordered=True)
-    
-    pollutant = st.selectbox("Select Pollutant for Monthly Analysis", POLLUTANTS)
-    
-    heatmap_data = monthly_data.pivot_table(index=['Region', 'Month'], columns='Year', values=pollutant)
-    
-    fig = px.imshow(
-        heatmap_data,
-        labels=dict(x="Year", y="Month", color=f"{pollutant} (µg/m³)"),
-        aspect="auto",
-        color_continuous_scale='RdYlGn_r',
-        title=f"Monthly {pollutant} Levels by Region and Year"
+    # Add threshold lines
+    fig.add_hline(
+        y=THRESHOLDS[pollutant]['moderate'],
+        line_dash="dot",
+        line_color="orange",
+        annotation_text=f"Moderate Threshold ({THRESHOLDS[pollutant]['moderate']} µg/m³)",
+        annotation_position="top left"
     )
+    
+    fig.add_hline(
+        y=THRESHOLDS[pollutant]['unhealthy'],
+        line_dash="dash",
+        line_color="red",
+        annotation_text=f"Unhealthy Threshold ({THRESHOLDS[pollutant]['unhealthy']} µg/m³)",
+        annotation_position="top left"
+    )
+    
     st.plotly_chart(fig, use_container_width=True)
     
-    # Detailed Pollution Statistics
+    # -------------------------------
+    # Detailed Statistics
+    # -------------------------------
     st.header("📋 Detailed Pollution Statistics")
-    tab1, tab2 = st.tabs(["By Region", "By Site"])
+    
+    tab1, tab2 = st.tabs(["Regional Averages", "Site-Specific Data"])
     
     with tab1:
         st.subheader("Regional Averages")
-        regional_stats = all_data.groupby('Region')[POLLUTANTS].agg(['mean', 'max', 'min'])
-        st.dataframe(
-            regional_stats.style.format("{:.1f}"),
-            use_container_width=True
-        )
+        regional_stats = all_data.groupby('Region')[POLLUTANTS].agg(['mean', 'max', 'min']).round(1)
+        st.dataframe(regional_stats, use_container_width=True)
     
     with tab2:
         st.subheader("Site-Specific Averages")
-        site_stats = all_data.groupby(['Region', 'Site'])[POLLUTANTS].mean().reset_index()
-        st.dataframe(
-            site_stats.style.format("{:.1f}"),
-            use_container_width=True,
-            height=600
-        )
+        site_stats = all_data.groupby(['Region', 'Site'])[POLLUTANTS].mean().round(1).reset_index()
+        st.dataframe(site_stats, use_container_width=True, height=600)
     
     # Footer
     st.markdown("---")
