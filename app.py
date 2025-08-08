@@ -35,16 +35,6 @@ def load_data(file_path, region_label):
         df['Region'] = region_label
         df['Year'] = df['Date'].dt.year
         
-        # Simplified AQI calculation
-        df['AQI'] = df['PM2.5'].apply(lambda x: 
-            50*(x/12) if x <= 12 else
-            50 + 50*((x-12)/(35.4-12)) if x <= 35.4 else
-            100 + 50*((x-35.4)/(55.4-35.4)) if x <= 55.4 else
-            150 + 50*((x-55.4)/(150.4-55.4)) if x <= 150.4 else
-            200 + 100*((x-150.4)/(250.4-150.4)) if x <= 250.4 else
-            300 + 200*((x-250.4)/(500-250.4))
-        ).round()
-        
         return df
         
     except Exception as e:
@@ -53,7 +43,7 @@ def load_data(file_path, region_label):
 
 # ------------- MAIN APP -------------
 def main():
-    st.title("🇷🇼 Rwanda Air Quality Dashboard")
+    st.title(" Rwanda Air Quality Dashboard")
     
     # Load data - using your specific files
     city_df = load_data("AIR_POLLUTION_IN_KIGALI_FROM_2020_TO_2024.csv", "Urban")
@@ -89,15 +79,21 @@ def main():
     fig.add_hline(y=THRESHOLDS[pollutant], line_dash="dash", line_color="red")
     st.plotly_chart(fig, use_container_width=True)
     
-    # Data Summary
+    # Data Summary - Simplified and more robust
     st.header("📋 Pollution Data Summary")
-    st.dataframe(
-        all_data.groupby('Region')[POLLUTANTS].mean().style
-        .format("{:.1f}")
-        .highlight_between(axis=0, left=THRESHOLDS, color="#ffcccc"),
-        use_container_width=True
-    )
-    
+    try:
+        summary_df = all_data.groupby('Region')[POLLUTANTS].mean().round(1)
+        st.dataframe(
+            summary_df.style.apply(
+                lambda x: ['background-color: #ffcccc' if x[col] > THRESHOLDS.get(col, float('inf')) else '' 
+                         for col in summary_df.columns],
+                axis=1
+            ),
+            use_container_width=True
+        )
+    except Exception as e:
+        st.error(f"Could not display data summary: {str(e)}")
+
     # Footer
     st.markdown("---")
     st.markdown(f"**Last Updated**: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
@@ -107,7 +103,6 @@ if __name__ == "__main__":
     if st.runtime.exists():
         main()
     else:
-        # For local execution without Streamlit context
         import streamlit.cli as stcli
         sys.argv = ["streamlit", "run", sys.argv[0], "--server.port=8501", "--server.address=0.0.0.0"]
         sys.exit(stcli.main())
