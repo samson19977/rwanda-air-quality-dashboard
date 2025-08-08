@@ -24,7 +24,6 @@ def load_and_validate(file_or_path, region_label):
     Returns validated DataFrame (may be empty if invalid).
     """
     if file_or_path is None:
-        # caller can decide to fallback to local file or sample; here return empty
         return pd.DataFrame()
 
     # read CSV
@@ -88,51 +87,6 @@ def load_and_validate(file_or_path, region_label):
     return df
 
 
-def create_sample_data():
-    """Create a small sample dataset so the UI can show something (prevents early exit)."""
-    dates = pd.date_range(end=datetime.now(), periods=10, freq='D')
-    data = {
-        'Date': list(dates) * 2,
-        'SO2': [5, 10, 2, 6, 4, 8, 3, 7, 9, 6] * 2,
-        'CO': [0.3]*20,
-        'PM10': [20, 30, 25, 40, 35, 22, 27, 33, 19, 28]*2,
-        'NO2': [10]*20,
-        'O3': [40]*20,
-        'PM2.5': [8, 18, 12, 20, 25, 10, 9, 15, 14, 22]*2,
-        'Site': ['Kigali-Center']*10 + ['Rural-1']*10,
-        'Latitude': [ -1.95 ]*20,
-        'Longitude': [ 30.05 ]*20,
-    }
-    df = pd.DataFrame(data)
-    df['Region'] = ['Urban']*10 + ['Rural']*10
-    df['Date'] = pd.to_datetime(df['Date'])
-    df['Year'] = df['Date'].dt.year
-    df['Month'] = df['Date'].dt.month
-    df['Hour'] = df['Date'].dt.hour
-    df['DayOfWeek'] = df['Date'].dt.day_name()
-    # compute AQI like above
-    def calc(pm):
-        bp = [
-            (0, 12, 0, 50),
-            (12, 35.4, 51, 100),
-            (35.4, 55.4, 101, 150),
-            (55.4, 150.4, 151, 200),
-            (150.4, 250.4, 201, 300),
-            (250.4, float('inf'), 301, 500),
-        ]
-        for a,b,c,d in bp:
-            if a <= pm <= b:
-                return ((d - c) / (b - a)) * (pm - a) + c
-        return None
-    df['AQI'] = df['PM2.5'].apply(calc).round()
-    df['AQI Category'] = pd.cut(
-        df['AQI'],
-        bins=[0,50,100,150,200,300,500],
-        labels=['Good','Moderate','Unhealthy (Sensitive)','Unhealthy','Very Unhealthy','Hazardous']
-    )
-    return df
-
-
 # ------------- MAIN UI -------------
 def main():
     st.title("🇷🇼 Rwanda Air Quality Dashboard")
@@ -140,39 +94,36 @@ def main():
 
     # Sidebar file upload + fallback to local files
     st.sidebar.header("📂 Data Input")
-    st.sidebar.write("Upload CSV files, or place defaults in the app folder.")
+    st.sidebar.write("Upload CSV files or use the default datasets.")
     city_upload = st.sidebar.file_uploader("Urban Air Quality (Kigali) CSV", type=["csv"])
     rural_upload = st.sidebar.file_uploader("Rural Air Quality CSV", type=["csv"])
 
-    # fallback to local filenames if upload not provided
-    if city_upload is None and os.path.exists("AIR_POLLUTION_IN_KIGALI_FROM_2020_TO_2024.csv"):
-        city_input = "AIR_POLLUTION_IN_KIGALI_FROM_2020_TO_2024.csv"
-    else:
-        city_input = city_upload
-
-    if rural_upload is None and os.path.exists("AIR_POLLUTION_IN_RURAL_FROM_2020_TO_2024.csv"):
-        rural_input = "AIR_POLLUTION_IN_RURAL_FROM_2020_TO_2024.csv"
-    else:
-        rural_input = rural_upload
+    # Always use the provided dataset files if no uploads
+    city_input = city_upload if city_upload is not None else "AIR_POLLUTION_IN_KIGALI_FROM_2020_TO_2024.csv"
+    rural_input = rural_upload if rural_upload is not None else "AIR_POLLUTION_IN_RURAL_FROM_2020_TO_2024.csv"
 
     st.sidebar.header("📊 Loading Status")
     city_df = load_and_validate(city_input, "Urban")
     rural_df = load_and_validate(rural_input, "Rural")
 
-    # If both missing/invalid, show a friendly message and use sample data (no st.stop)
+    # Show error if no data loaded
     if city_df.empty and rural_df.empty:
-        st.warning("No valid datasets loaded (uploads or default files). Showing sample data — upload your CSVs or place them in the app folder to view real data.")
-        all_data = create_sample_data()
-        using_sample = True
-    else:
-        # prefer whichever exists; concat existing ones
-        frames = []
-        if not city_df.empty:
-            frames.append(city_df)
-        if not rural_df.empty:
-            frames.append(rural_df)
-        all_data = pd.concat(frames, ignore_index=True)
-        using_sample = False
+        st.error("""
+        No valid datasets loaded. Please ensure either:
+        1. You've uploaded valid CSV files, OR
+        2. The default datasets exist in the app folder:
+           - AIR_POLLUTION_IN_KIGALI_FROM_2020_TO_2024.csv
+           - AIR_POLLUTION_IN_RURAL_FROM_2020_TO_2024.csv
+        """)
+        st.stop()
+
+    # Combine available data
+    frames = []
+    if not city_df.empty:
+        frames.append(city_df)
+    if not rural_df.empty:
+        frames.append(rural_df)
+    all_data = pd.concat(frames, ignore_index=True)
 
     # --- Key metrics ---
     cols = st.columns(5)
@@ -183,34 +134,79 @@ def main():
             col.error(f"Error rendering {label}: {e}")
 
     safe_metric(cols[0], "Total Records", f"{len(all_data):,}")
-    safe_metric(cols[1], "Monitoring Sites", all_data['Site'].nunique() if 'Site' in all_data.columns else "N/A")
-    try:
-        date_range = f"{all_data['Date'].min().date()} to {all_data['Date'].max().date()}"
-    except Exception:
-        date_range = "N/A"
+    safe_metric(cols[1], "Monitoring Sites", all_data['Site'].nunique())
+    date_range = f"{all_data['Date'].min().date()} to {all_data['Date'].max().date()}"
     safe_metric(cols[2], "Date Range", date_range)
-    try:
-        avg_pm25 = f"{all_data['PM2.5'].mean():.1f} µg/m³"
-    except Exception:
-        avg_pm25 = "N/A"
+    avg_pm25 = f"{all_data['PM2.5'].mean():.1f} µg/m³"
     safe_metric(cols[3], "Avg PM2.5", avg_pm25, "WHO Guideline: 15 µg/m³")
-    try:
-        exceed = (all_data['PM2.5'] > THRESHOLDS['PM2.5']).mean() * 100
-        exceed_s = f"{exceed:.1f}%"
-    except Exception:
-        exceed_s = "N/A"
+    exceed = (all_data['PM2.5'] > THRESHOLDS['PM2.5']).mean() * 100
+    exceed_s = f"{exceed:.1f}%"
     safe_metric(cols[4], "Exceedance Rate", exceed_s)
 
-    # --- AQI Pie chart (if available) ---
-    if 'AQI Category' in all_data.columns:
-        st.header("🌡️ Air Quality Index (AQI)")
-        fig = px.pie(all_data, names='AQI Category', title='AQI Category Distribution', hole=0.3)
+    # --- AQI Pie chart ---
+    st.header("🌡️ Air Quality Index (AQI)")
+    fig = px.pie(all_data, names='AQI Category', title='AQI Category Distribution', hole=0.3)
+    st.plotly_chart(fig, use_container_width=True)
+
+    # --- Time Series Analysis ---
+    st.header("📈 Time Series Analysis")
+    pollutant = st.selectbox("Select Pollutant", POLLUTANTS)
+    time_resolution = st.selectbox("Time Resolution", ["Daily", "Monthly", "Yearly"])
+    
+    # Group by selected time resolution
+    if time_resolution == "Daily":
+        group_col = 'Date'
+        ts_data = all_data.groupby(['Region', group_col])[pollutant].mean().reset_index()
+    elif time_resolution == "Monthly":
+        ts_data = all_data.copy()
+        ts_data['YearMonth'] = ts_data['Date'].dt.to_period('M')
+        ts_data = ts_data.groupby(['Region', 'YearMonth'])[pollutant].mean().reset_index()
+        ts_data['YearMonth'] = ts_data['YearMonth'].astype(str)
+    else:  # Yearly
+        ts_data = all_data.groupby(['Region', 'Year'])[pollutant].mean().reset_index()
+    
+    # Create time series plot
+    if time_resolution == "Monthly":
+        x_col = 'YearMonth'
+    elif time_resolution == "Yearly":
+        x_col = 'Year'
+    else:
+        x_col = 'Date'
+    
+    fig = px.line(
+        ts_data,
+        x=x_col,
+        y=pollutant,
+        color='Region',
+        title=f'{pollutant} Levels Over Time ({time_resolution})',
+        labels={pollutant: f'{pollutant} (µg/m³)'}
+    )
+    fig.add_hline(y=THRESHOLDS[pollutant], line_dash="dash", line_color="red", annotation_text="WHO Threshold")
+    st.plotly_chart(fig, use_container_width=True)
+
+    # --- Spatial Analysis ---
+    st.header("🗺️ Spatial Distribution")
+    if 'Latitude' in all_data.columns and 'Longitude' in all_data.columns:
+        site_data = all_data.groupby(['Site', 'Region', 'Latitude', 'Longitude'])[POLLUTANTS].mean().reset_index()
+        fig = px.scatter_mapbox(
+            site_data,
+            lat="Latitude",
+            lon="Longitude",
+            color="Region",
+            size="PM2.5",
+            hover_name="Site",
+            hover_data=POLLUTANTS,
+            zoom=10,
+            height=600,
+            title="Pollution Levels by Monitoring Site"
+        )
+        fig.update_layout(mapbox_style="open-street-map")
         st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.warning("Spatial data not available (missing Latitude/Longitude columns)")
 
     # Footer
     st.markdown("---")
-    if using_sample:
-        st.info("Displayed dataset: **Sample data** (replace by uploading your CSVs or placing the named CSV files next to app.py).")
     st.markdown(
         f"**Data Source**: Rwanda Environment Management Authority  \n"
         f"**Last Updated**: {datetime.now().strftime('%Y-%m-%d %H:%M')}  \n"
@@ -218,23 +214,16 @@ def main():
     )
 
 
-# ------------- ENTRYPOINT (makes python app.py work by launching Streamlit) -------------
+# ------------- ENTRYPOINT -------------
 if __name__ == "__main__":
-    # If this process is already a Streamlit server (rare), just call main.
-    # Otherwise, try to launch Streamlit CLI so the container actually runs a server.
-    # Many deployment platforms call `python app.py` — this handles that case.
     if os.environ.get("STREAMLIT_RUN") or os.environ.get("STREAMLIT_SERVER_PORT") or os.environ.get("STREAMLIT_SERVER_ADDRESS"):
-        # likely already running under streamlit
         main()
     else:
-        # Start Streamlit as subprocess so container binds to expected port/address
         port = os.environ.get("PORT", "8501")
         cmd = [sys.executable, "-m", "streamlit", "run", sys.argv[0], "--server.port", port, "--server.address", "0.0.0.0"]
         print("Starting Streamlit with:", " ".join(cmd))
         try:
-            # This blocks (desired) and streams logs to stdout/stderr
             subprocess.run(cmd, check=True)
         except subprocess.CalledProcessError as e:
             print("Failed to start Streamlit:", e)
-            print("If you prefer, run locally with: streamlit run app.py")
             sys.exit(1)
