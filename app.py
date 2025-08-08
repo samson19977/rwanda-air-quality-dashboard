@@ -59,9 +59,18 @@ def show_thresholds():
         - **Unhealthy**: Above moderate level
         """)
         
-        threshold_df = pd.DataFrame(THRESHOLDS).T.reset_index()
-        threshold_df.columns = ['Pollutant', 'Safe Level', 'Moderate Level', 'Unhealthy Level']
-        st.dataframe(threshold_df.style.format("{:.1f}"), use_container_width=True)
+        # Create threshold table in a way that works with Streamlit
+        threshold_data = []
+        for pollutant, levels in THRESHOLDS.items():
+            threshold_data.append({
+                'Pollutant': pollutant,
+                'Safe Level': levels['safe'],
+                'Moderate Level': levels['moderate'],
+                'Unhealthy Level': levels['unhealthy']
+            })
+        
+        threshold_df = pd.DataFrame(threshold_data)
+        st.dataframe(threshold_df, use_container_width=True)
 
 # ------------- MAIN APP -------------
 def main():
@@ -89,9 +98,7 @@ def main():
     cols[3].metric("Exceedance Rate", f"{exceed_percent:.1f}%", 
                   delta=f"{exceed_percent:.1f}% above moderate threshold")
     
-    # -------------------------------
-    # NEW: Pollutant Comparison Radar Chart
-    # -------------------------------
+    # Pollutant Comparison Radar Chart
     st.header("📊 Pollutant Comparison (Relative Levels)")
     avg_pollutants = all_data.groupby('Region')[POLLUTANTS].mean().reset_index()
     
@@ -114,9 +121,7 @@ def main():
     )
     st.plotly_chart(fig, use_container_width=True)
     
-    # -------------------------------
-    # NEW: Monthly Trends Heatmap
-    # -------------------------------
+    # Monthly Trends Heatmap
     st.header("🌡️ Monthly Pollution Patterns")
     monthly_data = all_data.groupby(['Region', 'Month', 'Year'])[POLLUTANTS].mean().reset_index()
     month_order = ['January', 'February', 'March', 'April', 'May', 'June', 
@@ -131,14 +136,12 @@ def main():
         heatmap_data,
         labels=dict(x="Year", y="Month", color=f"{pollutant} (µg/m³)"),
         aspect="auto",
-        color_continuous_scale='RdYlGn_r',  # Red-Yellow-Green (reversed)
+        color_continuous_scale='RdYlGn_r',
         title=f"Monthly {pollutant} Levels by Region and Year"
     )
     st.plotly_chart(fig, use_container_width=True)
     
-    # -------------------------------
-    # Enhanced Data Summary
-    # -------------------------------
+    # Detailed Pollution Statistics
     st.header("📋 Detailed Pollution Statistics")
     tab1, tab2 = st.tabs(["By Region", "By Site"])
     
@@ -146,12 +149,7 @@ def main():
         st.subheader("Regional Averages")
         regional_stats = all_data.groupby('Region')[POLLUTANTS].agg(['mean', 'max', 'min'])
         st.dataframe(
-            regional_stats.style.format("{:.1f}").apply(
-                lambda x: ['background-color: #ffcccc' if x.name[1] == 'mean' and 
-                          x[p] > THRESHOLDS[p]['moderate'] else '' 
-                         for p in POLLUTANTS],
-                axis=1
-            ),
+            regional_stats.style.format("{:.1f}"),
             use_container_width=True
         )
     
@@ -159,11 +157,7 @@ def main():
         st.subheader("Site-Specific Averages")
         site_stats = all_data.groupby(['Region', 'Site'])[POLLUTANTS].mean().reset_index()
         st.dataframe(
-            site_stats.style.format("{:.1f}").apply(
-                lambda x: ['background-color: #ffcccc' if x[p] > THRESHOLDS[p]['moderate'] else '' 
-                          for p in POLLUTANTS],
-                axis=1
-            ),
+            site_stats.style.format("{:.1f}"),
             use_container_width=True,
             height=600
         )
