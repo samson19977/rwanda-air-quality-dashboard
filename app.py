@@ -123,27 +123,7 @@ def main():
                 - **301-500**: Hazardous ☠️
                 """)
 
-        # Map Visualization
-        st.header("📍 Monitoring Locations")
-        map_cols = ['Latitude', 'Longitude', 'Site']
-        if all(col in all_data.columns for col in map_cols):
-            map_tab1, map_tab2 = st.tabs(["Site Map", "Pollution Heatmap"])
-            with map_tab1:
-                fig = px.scatter_mapbox(
-                    all_data.drop_duplicates('Site'),
-                    lat="Latitude", lon="Longitude", hover_name="Site",
-                    color="Region", mapbox_style="carto-positron", zoom=7
-                )
-                fig.update_layout(height=600)
-                st.plotly_chart(fig, use_container_width=True)
-            with map_tab2:
-                fig = px.density_mapbox(
-                    all_data, lat="Latitude", lon="Longitude", z="PM2.5",
-                    radius=20, zoom=7, mapbox_style="carto-positron",
-                    title="PM2.5 Concentration Heatmap"
-                )
-                st.plotly_chart(fig, use_container_width=True)
-
+       
         # Time Series Trends
         st.header("⏳ Pollution Trends")
         col1, col2, col3 = st.columns([2, 2, 1])
